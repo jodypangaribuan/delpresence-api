@@ -10,13 +10,11 @@ import (
 )
 
 var (
-	ErrUserNotFound       = errors.New("user not found")
-	ErrUserAlreadyExists  = errors.New("user already exists")
-	ErrInvalidCredentials = errors.New("invalid credentials")
-	ErrDatabaseError      = errors.New("database error")
+	ErrUserNotFound      = errors.New("user not found")
+	ErrUserAlreadyExists = errors.New("user already exists")
 )
 
-// UserRepository handles database operations for User
+// UserRepository handles database operations for users
 type UserRepository struct {
 	DB *gorm.DB
 }
@@ -28,48 +26,28 @@ func NewUserRepository() *UserRepository {
 	}
 }
 
-// CreateUser creates a new user in the database
+// CreateUser creates a new user
 func (r *UserRepository) CreateUser(user *models.User) error {
-	// Check if user with same NIM/NIP or email already exists
-	var existingUser models.User
-	result := r.DB.Where("nim_nip = ? OR email = ?", user.NimNip, user.Email).First(&existingUser)
-	if result.Error == nil {
+	// Check if user with email already exists
+	var count int64
+	if err := r.DB.Model(&models.User{}).Where("email = ?", user.Email).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
 		return ErrUserAlreadyExists
-	} else if !errors.Is(result.Error, gorm.ErrRecordNotFound) {
-		return ErrDatabaseError
 	}
 
-	// Create the user
-	result = r.DB.Create(user)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	return nil
+	return r.DB.Create(user).Error
 }
 
 // GetUserByID retrieves a user by ID
 func (r *UserRepository) GetUserByID(id uint) (*models.User, error) {
 	var user models.User
-	result := r.DB.First(&user, id)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+	if err := r.DB.First(&user, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}
-		return nil, result.Error
-	}
-	return &user, nil
-}
-
-// GetUserByNimNip retrieves a user by NIM/NIP
-func (r *UserRepository) GetUserByNimNip(nimNip string) (*models.User, error) {
-	var user models.User
-	result := r.DB.Where("nim_nip = ?", nimNip).First(&user)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
-			return nil, ErrUserNotFound
-		}
-		return nil, result.Error
+		return nil, err
 	}
 	return &user, nil
 }
@@ -77,45 +55,26 @@ func (r *UserRepository) GetUserByNimNip(nimNip string) (*models.User, error) {
 // GetUserByEmail retrieves a user by email
 func (r *UserRepository) GetUserByEmail(email string) (*models.User, error) {
 	var user models.User
-	result := r.DB.Where("email = ?", email).First(&user)
-	if result.Error != nil {
-		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
+	if err := r.DB.Where("email = ?", email).First(&user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, ErrUserNotFound
 		}
-		return nil, result.Error
+		return nil, err
 	}
 	return &user, nil
 }
 
-// UpdateUser updates user information
+// UpdateUser updates a user's information
 func (r *UserRepository) UpdateUser(user *models.User) error {
-	result := r.DB.Save(user)
-	if result.Error != nil {
-		return result.Error
-	}
-	return nil
+	return r.DB.Save(user).Error
 }
 
-// VerifyUser updates user verification status
+// VerifyUser sets a user's verified status to true
 func (r *UserRepository) VerifyUser(userID uint) error {
-	result := r.DB.Model(&models.User{}).Where("id = ?", userID).Update("verified", true)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return r.DB.Model(&models.User{}).Where("id = ?", userID).Update("verified", true).Error
 }
 
-// DeleteUser marks a user as deleted
+// DeleteUser deletes a user
 func (r *UserRepository) DeleteUser(userID uint) error {
-	result := r.DB.Delete(&models.User{}, userID)
-	if result.Error != nil {
-		return result.Error
-	}
-	if result.RowsAffected == 0 {
-		return ErrUserNotFound
-	}
-	return nil
+	return r.DB.Delete(&models.User{}, userID).Error
 }

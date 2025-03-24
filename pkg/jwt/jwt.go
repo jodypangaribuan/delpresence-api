@@ -18,15 +18,17 @@ var (
 
 // CustomClaims defines the claims for JWT
 type CustomClaims struct {
-	UserID uint   `json:"user_id"`
-	NimNip string `json:"nim_nip"`
-	Name   string `json:"name"`
-	Email  string `json:"email"`
+	UserID     uint   `json:"user_id"`
+	NimNip     string `json:"nim_nip"`
+	FirstName  string `json:"first_name"`
+	MiddleName string `json:"middle_name"`
+	LastName   string `json:"last_name"`
+	Email      string `json:"email"`
 	jwt.RegisteredClaims
 }
 
 // GenerateAccessToken generates a new JWT access token
-func GenerateAccessToken(userID uint, nimNip, name, email string) (string, time.Time, error) {
+func GenerateAccessToken(userID uint, nimNip string, firstName string, middleName string, lastName string, email string) (string, time.Time, error) {
 	// Get secret key from environment
 	secretKey := os.Getenv("JWT_SECRET")
 	if secretKey == "" {
@@ -48,10 +50,12 @@ func GenerateAccessToken(userID uint, nimNip, name, email string) (string, time.
 
 	// Create the Claims
 	claims := CustomClaims{
-		UserID: userID,
-		NimNip: nimNip,
-		Name:   name,
-		Email:  email,
+		UserID:     userID,
+		NimNip:     nimNip,
+		FirstName:  firstName,
+		MiddleName: middleName,
+		LastName:   lastName,
+		Email:      email,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiryTime),
 			IssuedAt:  jwt.NewNumericDate(time.Now()),

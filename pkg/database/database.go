@@ -73,7 +73,10 @@ func ConnectDB() error {
 	// Migrate the schema
 	err = DB.AutoMigrate(
 		&models.User{},
+		&models.Student{},
+		&models.Lecture{},
 		&models.Token{},
+		&models.Admin{},
 	)
 	if err != nil {
 		return err
@@ -94,4 +97,9 @@ func ConnectDB() error {
 
 	log.Println("Connected to PostgreSQL database successfully!")
 	return nil
+}
+
+// GetDB returns the database connection
+func GetDB() *gorm.DB {
+	return DB
 }

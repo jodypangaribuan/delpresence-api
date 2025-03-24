@@ -70,10 +70,11 @@ func AuthMiddleware() gin.HandlerFunc {
 
 		// Set user info in the context
 		c.Set("user_id", user.ID)
-		c.Set("nim_nip", user.NimNip)
 		c.Set("user_type", user.UserType)
 		c.Set("email", user.Email)
-		c.Set("name", user.Name)
+		c.Set("first_name", user.FirstName)
+		c.Set("middle_name", user.MiddleName)
+		c.Set("last_name", user.LastName)
 
 		c.Next()
 	}
