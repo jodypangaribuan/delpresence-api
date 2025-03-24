@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"delpresence-api/internal/handlers"
 	"delpresence-api/internal/middleware"
@@ -87,7 +88,11 @@ func main() {
 func configCors(router *gin.Engine) {
 	// Get allowed origins from environment
 	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
-	allowedOrigins := []string{"http://localhost:3000"}
+	allowedOrigins := []string{
+		"http://localhost:3000",
+		"http://52.64.100.164:8080",  // Your AWS API domain
+		"https://52.64.100.164:8080", // Your AWS API domain with HTTPS
+	}
 
 	if allowedOriginsStr != "" {
 		allowedOrigins = strings.Split(allowedOriginsStr, ",")
@@ -97,9 +102,16 @@ func configCors(router *gin.Engine) {
 	config := cors.DefaultConfig()
 	config.AllowOrigins = allowedOrigins
 	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
-	config.ExposeHeaders = []string{"Content-Length"}
+	config.AllowHeaders = []string{
+		"Origin",
+		"Content-Type",
+		"Accept",
+		"Authorization",
+		"X-Requested-With",
+	}
+	config.ExposeHeaders = []string{"Content-Length", "Content-Type"}
 	config.AllowCredentials = true
+	config.MaxAge = 12 * time.Hour // Cache preflight requests for 12 hours
 
 	router.Use(cors.New(config))
 }
