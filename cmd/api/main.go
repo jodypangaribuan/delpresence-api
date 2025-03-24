@@ -5,7 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 
 	"delpresence-api/internal/handlers"
 	"delpresence-api/internal/middleware"
@@ -88,40 +87,19 @@ func main() {
 func configCors(router *gin.Engine) {
 	// Get allowed origins from environment
 	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
-	env := os.Getenv("ENV")
+	allowedOrigins := []string{"http://localhost:3000"}
 
-	var allowedOrigins []string
-
-	if env == "production" {
-		// In production, use specific allowed origins
-		allowedOrigins = []string{
-			"http://localhost:3000",
-			"http://52.64.100.164:8080",
-			"https://52.64.100.164:8080",
-		}
-
-		if allowedOriginsStr != "" {
-			allowedOrigins = append(allowedOrigins, strings.Split(allowedOriginsStr, ",")...)
-		}
-	} else {
-		// In development, allow all origins
-		allowedOrigins = []string{"*"}
+	if allowedOriginsStr != "" {
+		allowedOrigins = strings.Split(allowedOriginsStr, ",")
 	}
 
 	// Configure CORS middleware
 	config := cors.DefaultConfig()
 	config.AllowOrigins = allowedOrigins
 	config.AllowMethods = []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"}
-	config.AllowHeaders = []string{
-		"Origin",
-		"Content-Type",
-		"Accept",
-		"Authorization",
-		"X-Requested-With",
-	}
-	config.ExposeHeaders = []string{"Content-Length", "Content-Type"}
+	config.AllowHeaders = []string{"Origin", "Content-Type", "Accept", "Authorization"}
+	config.ExposeHeaders = []string{"Content-Length"}
 	config.AllowCredentials = true
-	config.MaxAge = 12 * time.Hour // Cache preflight requests for 12 hours
 
 	router.Use(cors.New(config))
 }
