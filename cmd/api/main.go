@@ -88,14 +88,24 @@ func main() {
 func configCors(router *gin.Engine) {
 	// Get allowed origins from environment
 	allowedOriginsStr := os.Getenv("ALLOWED_ORIGINS")
-	allowedOrigins := []string{
-		"http://localhost:3000",
-		"http://52.64.100.164:8080",  // Your AWS API domain
-		"https://52.64.100.164:8080", // Your AWS API domain with HTTPS
-	}
+	env := os.Getenv("ENV")
 
-	if allowedOriginsStr != "" {
-		allowedOrigins = strings.Split(allowedOriginsStr, ",")
+	var allowedOrigins []string
+
+	if env == "production" {
+		// In production, use specific allowed origins
+		allowedOrigins = []string{
+			"http://localhost:3000",
+			"http://52.64.100.164:8080",
+			"https://52.64.100.164:8080",
+		}
+
+		if allowedOriginsStr != "" {
+			allowedOrigins = append(allowedOrigins, strings.Split(allowedOriginsStr, ",")...)
+		}
+	} else {
+		// In development, allow all origins
+		allowedOrigins = []string{"*"}
 	}
 
 	// Configure CORS middleware
