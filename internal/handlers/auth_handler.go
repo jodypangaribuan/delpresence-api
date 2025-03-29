@@ -62,6 +62,7 @@ func (h *AuthHandler) RegisterStudent(c *gin.Context) {
 		Email:      input.Email,
 		Password:   input.Password,
 		UserType:   models.StudentType,
+		Verified:   false, // Set verified to false by default
 	}
 
 	if err := tx.Create(user).Error; err != nil {
@@ -89,9 +90,12 @@ func (h *AuthHandler) RegisterStudent(c *gin.Context) {
 		return
 	}
 
+	// Generate and send verification email
+	go h.sendVerificationEmail(user)
+
 	// Return success response
 	student.User = *user
-	utils.SuccessResponse(c, http.StatusCreated, "Student registered successfully", student.ToStudentResponse())
+	utils.SuccessResponse(c, http.StatusCreated, "Student registered successfully, please check your email for verification", student.ToStudentResponse())
 }
 
 // RegisterLecture handles lecturer registration
@@ -120,6 +124,7 @@ func (h *AuthHandler) RegisterLecture(c *gin.Context) {
 		Email:      input.Email,
 		Password:   input.Password,
 		UserType:   models.LectureType,
+		Verified:   false, // Set verified to false by default
 	}
 
 	if err := tx.Create(user).Error; err != nil {
@@ -145,9 +150,12 @@ func (h *AuthHandler) RegisterLecture(c *gin.Context) {
 		return
 	}
 
+	// Generate and send verification email
+	go h.sendVerificationEmail(user)
+
 	// Return success response
 	lecture.User = *user
-	utils.SuccessResponse(c, http.StatusCreated, "Lecturer registered successfully", lecture.ToLectureResponse())
+	utils.SuccessResponse(c, http.StatusCreated, "Lecturer registered successfully, please check your email for verification", lecture.ToLectureResponse())
 }
 
 // Login handles user login
@@ -198,6 +206,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		return
 	}
 
+	// Check if user is verified
+	if !user.Verified {
+		// Generate and send a new verification email if needed
+		go h.sendVerificationEmail(user)
+		utils.ForbiddenResponse(c, "Email not verified. Please check your email for verification link.")
+		return
+	}
+
 	// Generate JWT token
 	tokenString, expiryTime, err := jwt.GenerateAccessToken(user.ID, "", user.FirstName, user.MiddleName, user.LastName, user.Email)
 	if err != nil {
@@ -225,7 +241,7 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 	// Save refresh token to database
 	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, refreshToken, refreshTokenExpiry)
+	err = h.tokenRepo.CreateToken(user.ID, refreshToken, models.RefreshToken, refreshTokenExpiry)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
 		return
@@ -315,7 +331,7 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 
 	// Save refresh token to database
 	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, refreshToken, refreshTokenExpiry)
+	err = h.tokenRepo.CreateToken(user.ID, refreshToken, models.RefreshToken, refreshTokenExpiry)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
 		return
@@ -348,7 +364,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 	}
 
 	// Get refresh token from database
-	token, err := h.tokenRepo.GetTokenByValue(input.RefreshToken)
+	token, err := h.tokenRepo.GetTokenByValue(input.RefreshToken, models.RefreshToken)
 	if err != nil {
 		utils.UnauthorizedResponse(c, "Invalid refresh token")
 		return
@@ -439,7 +455,7 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 
 	// Save new refresh token to database
 	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, newRefreshToken, refreshTokenExpiry)
+	err = h.tokenRepo.CreateToken(user.ID, newRefreshToken, models.RefreshToken, refreshTokenExpiry)
 	if err != nil {
 		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
 		return

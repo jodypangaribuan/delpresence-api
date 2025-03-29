@@ -28,15 +28,16 @@ func NewTokenRepository() *TokenRepository {
 	}
 }
 
-// CreateToken creates a new refresh token in the database
-func (r *TokenRepository) CreateToken(userID uint, token string, expiry time.Time) error {
-	refreshToken := &models.Token{
+// CreateToken creates a new token in the database
+func (r *TokenRepository) CreateToken(userID uint, token string, tokenType models.TokenType, expiry time.Time) error {
+	newToken := &models.Token{
 		UserID:    userID,
 		Token:     token,
+		Type:      tokenType,
 		ExpiresAt: expiry,
 	}
 
-	result := r.DB.Create(refreshToken)
+	result := r.DB.Create(newToken)
 	if result.Error != nil {
 		return ErrTokenCreateFail
 	}
@@ -44,10 +45,10 @@ func (r *TokenRepository) CreateToken(userID uint, token string, expiry time.Tim
 	return nil
 }
 
-// GetTokenByValue retrieves a token by its value
-func (r *TokenRepository) GetTokenByValue(tokenStr string) (*models.Token, error) {
+// GetTokenByValue retrieves a token by its value and type
+func (r *TokenRepository) GetTokenByValue(tokenStr string, tokenType models.TokenType) (*models.Token, error) {
 	var token models.Token
-	result := r.DB.Where("token = ?", tokenStr).First(&token)
+	result := r.DB.Where("token = ? AND type = ?", tokenStr, tokenType).First(&token)
 	if result.Error != nil {
 		if errors.Is(result.Error, gorm.ErrRecordNotFound) {
 			return nil, ErrTokenNotFound
@@ -73,6 +74,15 @@ func (r *TokenRepository) DeleteToken(tokenStr string) error {
 	}
 	if result.RowsAffected == 0 {
 		return ErrTokenNotFound
+	}
+	return nil
+}
+
+// DeleteUserTokensByType deletes all tokens of a specific type for a user
+func (r *TokenRepository) DeleteUserTokensByType(userID uint, tokenType models.TokenType) error {
+	result := r.DB.Where("user_id = ? AND type = ?", userID, tokenType).Delete(&models.Token{})
+	if result.Error != nil {
+		return result.Error
 	}
 	return nil
 }
