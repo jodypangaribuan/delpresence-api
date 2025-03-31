@@ -1,8 +1,6 @@
 package handlers
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"log"
 	"net/http"
 	"os"
@@ -18,248 +16,18 @@ import (
 
 // AuthHandler handles authentication related requests
 type AuthHandler struct {
-	userRepo    *repository.UserRepository
-	studentRepo *repository.StudentRepository
-	lectureRepo *repository.LectureRepository
-	adminRepo   *repository.AdminRepository
-	tokenRepo   *repository.TokenRepository
+	userRepo  *repository.UserRepository
+	adminRepo *repository.AdminRepository
+	tokenRepo *repository.TokenRepository
 }
 
 // NewAuthHandler creates a new instance of AuthHandler
 func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{
-		userRepo:    repository.NewUserRepository(),
-		studentRepo: repository.NewStudentRepository(),
-		lectureRepo: repository.NewLectureRepository(),
-		adminRepo:   repository.NewAdminRepository(),
-		tokenRepo:   repository.NewTokenRepository(),
+		userRepo:  repository.NewUserRepository(),
+		adminRepo: repository.NewAdminRepository(),
+		tokenRepo: repository.NewTokenRepository(),
 	}
-}
-
-// RegisterStudent handles student registration
-func (h *AuthHandler) RegisterStudent(c *gin.Context) {
-	var input models.StudentRegistrationInput
-
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
-		return
-	}
-
-	// Start a database transaction
-	tx := repository.BeginTransaction()
-	if tx == nil {
-		utils.InternalServerErrorResponse(c, "Failed to start transaction")
-		return
-	}
-	defer tx.Rollback()
-
-	// 1. Create user
-	user := &models.User{
-		FirstName:  input.FirstName,
-		MiddleName: input.MiddleName,
-		LastName:   input.LastName,
-		Email:      input.Email,
-		Password:   input.Password,
-		UserType:   models.StudentType,
-		Verified:   false, // Set verified to false by default
-	}
-
-	if err := tx.Create(user).Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to create user")
-		return
-	}
-
-	// 2. Create student
-	student := &models.Student{
-		UserID:  user.ID,
-		NIM:     input.NIM,
-		Major:   input.Major,
-		Faculty: input.Faculty,
-		Batch:   input.Batch,
-	}
-
-	if err := tx.Create(student).Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to create student profile")
-		return
-	}
-
-	// Commit the transaction
-	if err := tx.Commit().Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to complete registration")
-		return
-	}
-
-	// Generate and send verification email
-	go h.sendVerificationEmail(user)
-
-	// Return success response
-	student.User = *user
-	utils.SuccessResponse(c, http.StatusCreated, "Student registered successfully, please check your email for verification", student.ToStudentResponse())
-}
-
-// RegisterLecture handles lecturer registration
-func (h *AuthHandler) RegisterLecture(c *gin.Context) {
-	var input models.LectureRegistrationInput
-
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
-		return
-	}
-
-	// Start a database transaction
-	tx := repository.BeginTransaction()
-	if tx == nil {
-		utils.InternalServerErrorResponse(c, "Failed to start transaction")
-		return
-	}
-	defer tx.Rollback()
-
-	// 1. Create user
-	user := &models.User{
-		FirstName:  input.FirstName,
-		MiddleName: input.MiddleName,
-		LastName:   input.LastName,
-		Email:      input.Email,
-		Password:   input.Password,
-		UserType:   models.LectureType,
-		Verified:   false, // Set verified to false by default
-	}
-
-	if err := tx.Create(user).Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to create user")
-		return
-	}
-
-	// 2. Create lecture
-	lecture := &models.Lecture{
-		UserID:   user.ID,
-		NIP:      input.NIP,
-		Position: input.Position,
-	}
-
-	if err := tx.Create(lecture).Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to create lecturer profile")
-		return
-	}
-
-	// Commit the transaction
-	if err := tx.Commit().Error; err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to complete registration")
-		return
-	}
-
-	// Generate and send verification email
-	go h.sendVerificationEmail(user)
-
-	// Return success response
-	lecture.User = *user
-	utils.SuccessResponse(c, http.StatusCreated, "Lecturer registered successfully, please check your email for verification", lecture.ToLectureResponse())
-}
-
-// Login handles user login
-func (h *AuthHandler) Login(c *gin.Context) {
-	var input models.UserLoginInput
-
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
-		return
-	}
-
-	// Find user by login ID (NIM or NIP)
-	var user *models.User
-	var err error
-	var userType string
-	var userResponse interface{}
-
-	log.Printf("Login attempt with loginID: %s", input.LoginID)
-
-	// Check if it's a student (lookup by NIM)
-	student, err := h.studentRepo.GetStudentByNIM(input.LoginID)
-	if err == nil {
-		user = &student.User
-		userType = "student"
-		userResponse = student.ToStudentResponse()
-		log.Printf("Successfully found student with NIM: %s", input.LoginID)
-	} else {
-		log.Printf("Not a student (error: %v), checking if it's a lecturer", err)
-
-		// Check if it's a lecture (lookup by NIP)
-		lecture, err := h.lectureRepo.GetLectureByNIP(input.LoginID)
-		if err == nil {
-			user = &lecture.User
-			userType = "lecture"
-			userResponse = lecture.ToLectureResponse()
-			log.Printf("Successfully found lecturer with NIP: %s", input.LoginID)
-		} else {
-			log.Printf("Not a lecturer either (error: %v)", err)
-			utils.UnauthorizedResponse(c, "Invalid credentials")
-			return
-		}
-	}
-
-	// Verify password
-	if !user.ComparePassword(input.Password) {
-		utils.UnauthorizedResponse(c, "Invalid credentials")
-		return
-	}
-
-	// Check if user is verified
-	if !user.Verified {
-		// Generate and send a new verification email if needed
-		go h.sendVerificationEmail(user)
-		utils.ForbiddenResponse(c, "Email not verified. Please check your email for verification link.")
-		return
-	}
-
-	// Generate JWT token
-	tokenString, expiryTime, err := jwt.GenerateAccessToken(user.ID, "", user.FirstName, user.MiddleName, user.LastName, user.Email)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate access token")
-		return
-	}
-
-	// Generate refresh token
-	refreshToken, err := generateRefreshToken()
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate refresh token")
-		return
-	}
-
-	// Parse refresh token expiry from environment
-	refreshExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY")
-	if refreshExpiryStr == "" {
-		refreshExpiryStr = "168h" // Default 7 days
-	}
-
-	refreshExpiry, err := time.ParseDuration(refreshExpiryStr)
-	if err != nil {
-		refreshExpiry = 168 * time.Hour // Default 7 days
-	}
-
-	// Save refresh token to database
-	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, refreshToken, models.RefreshToken, refreshTokenExpiry)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
-		return
-	}
-
-	// Create response
-	response := map[string]interface{}{
-		"user": userResponse,
-		"tokens": map[string]interface{}{
-			"access_token":  tokenString,
-			"refresh_token": refreshToken,
-			"expires_in":    int(time.Until(expiryTime).Seconds()),
-			"token_type":    "Bearer",
-		},
-		"user_type": userType,
-	}
-
-	utils.SuccessResponse(c, http.StatusOK, "Login successful", response)
 }
 
 // AdminLogin handles admin login
@@ -312,11 +80,7 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	}
 
 	// Generate refresh token
-	refreshToken, err := generateRefreshToken()
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate refresh token")
-		return
-	}
+	refreshToken := generateRandomString(32)
 
 	// Parse refresh token expiry from environment
 	refreshExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY")
@@ -353,215 +117,54 @@ func (h *AuthHandler) AdminLogin(c *gin.Context) {
 	utils.SuccessResponse(c, http.StatusOK, "Login successful", response)
 }
 
-// RefreshToken handles token refresh
-func (h *AuthHandler) RefreshToken(c *gin.Context) {
-	var input models.RefreshTokenRequest
-
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
-		return
-	}
-
-	// Get refresh token from database
-	token, err := h.tokenRepo.GetTokenByValue(input.RefreshToken, models.RefreshToken)
-	if err != nil {
-		utils.UnauthorizedResponse(c, "Invalid refresh token")
-		return
-	}
-
-	// Check if token is expired
-	if token.ExpiresAt.Before(time.Now()) {
-		// Delete expired token
-		_ = h.tokenRepo.DeleteToken(token.Token)
-		utils.UnauthorizedResponse(c, "Refresh token expired")
-		return
-	}
-
-	// Get user
-	user, err := h.userRepo.GetUserByID(token.UserID)
-	if err != nil {
-		utils.UnauthorizedResponse(c, "User not found")
-		return
-	}
-
-	// Get user profile based on user type
-	var userResponse interface{}
-	var userType string
-
-	if user.UserType == models.StudentType {
-		student, err := h.studentRepo.GetStudentByUserID(user.ID)
-		if err != nil {
-			utils.UnauthorizedResponse(c, "Student profile not found")
-			return
-		}
-		student.User = *user
-		userResponse = student.ToStudentResponse()
-		userType = "student"
-	} else if user.UserType == models.LectureType {
-		lecture, err := h.lectureRepo.GetLectureByUserID(user.ID)
-		if err != nil {
-			utils.UnauthorizedResponse(c, "Lecturer profile not found")
-			return
-		}
-		lecture.User = *user
-		userResponse = lecture.ToLectureResponse()
-		userType = "lecture"
-	} else if user.UserType == models.AdminType {
-		admin, err := h.adminRepo.GetAdminByUserID(user.ID)
-		if err != nil {
-			utils.UnauthorizedResponse(c, "Admin profile not found")
-			return
-		}
-		admin.User = *user
-		userResponse = admin.ToAdminResponse()
-		userType = "admin"
-	} else {
-		utils.UnauthorizedResponse(c, "Invalid user type")
-		return
-	}
-
-	// Generate new access token
-	tokenString, expiryTime, err := jwt.GenerateAccessToken(user.ID, "", user.FirstName, user.MiddleName, user.LastName, user.Email)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate access token")
-		return
-	}
-
-	// Generate new refresh token
-	newRefreshToken, err := generateRefreshToken()
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate refresh token")
-		return
-	}
-
-	// Delete old refresh token
-	err = h.tokenRepo.DeleteToken(token.Token)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to delete old refresh token")
-		return
-	}
-
-	// Parse refresh token expiry from environment
-	refreshExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY")
-	if refreshExpiryStr == "" {
-		refreshExpiryStr = "168h" // Default 7 days
-	}
-
-	refreshExpiry, err := time.ParseDuration(refreshExpiryStr)
-	if err != nil {
-		refreshExpiry = 168 * time.Hour // Default 7 days
-	}
-
-	// Save new refresh token to database
-	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, newRefreshToken, models.RefreshToken, refreshTokenExpiry)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
-		return
-	}
-
-	// Create response
-	response := map[string]interface{}{
-		"user": userResponse,
-		"tokens": map[string]interface{}{
-			"access_token":  tokenString,
-			"refresh_token": newRefreshToken,
-			"expires_in":    int(time.Until(expiryTime).Seconds()),
-			"token_type":    "Bearer",
-		},
-		"user_type": userType,
-	}
-
-	utils.SuccessResponse(c, http.StatusOK, "Token refreshed successfully", response)
-}
-
-// Logout handles user logout
-func (h *AuthHandler) Logout(c *gin.Context) {
-	var input models.RefreshTokenRequest
-
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
-		return
-	}
-
-	// Delete refresh token
-	err := h.tokenRepo.DeleteToken(input.RefreshToken)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to logout")
-		return
-	}
-
-	utils.SuccessResponse(c, http.StatusOK, "Logout successful", nil)
-}
-
 // GetCurrentUser handles getting the current user's information
 func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
-	// Get user ID from context (set by auth middleware)
+	// Get user ID from context
 	userID, exists := c.Get("user_id")
 	if !exists {
-		utils.UnauthorizedResponse(c, "User not authenticated")
+		utils.UnauthorizedResponse(c, "User not authorized")
 		return
 	}
 
-	// Get user
+	// Get user from database
 	user, err := h.userRepo.GetUserByID(userID.(uint))
 	if err != nil {
-		utils.UnauthorizedResponse(c, "User not found")
+		utils.NotFoundResponse(c, "User not found")
 		return
 	}
+
+	var userResponse interface{}
 
 	// Get user profile based on user type
-	var userResponse interface{}
-	var userType string
-
-	if user.UserType == models.StudentType {
-		student, err := h.studentRepo.GetStudentByUserID(user.ID)
-		if err != nil {
-			utils.UnauthorizedResponse(c, "Student profile not found")
-			return
-		}
-		student.User = *user
-		userResponse = student.ToStudentResponse()
-		userType = "student"
-	} else if user.UserType == models.LectureType {
-		lecture, err := h.lectureRepo.GetLectureByUserID(user.ID)
-		if err != nil {
-			utils.UnauthorizedResponse(c, "Lecturer profile not found")
-			return
-		}
-		lecture.User = *user
-		userResponse = lecture.ToLectureResponse()
-		userType = "lecture"
-	} else if user.UserType == models.AdminType {
+	switch user.UserType {
+	case models.AdminType:
 		admin, err := h.adminRepo.GetAdminByUserID(user.ID)
 		if err != nil {
-			utils.UnauthorizedResponse(c, "Admin profile not found")
+			utils.NotFoundResponse(c, "Admin profile not found")
 			return
 		}
-		admin.User = *user
 		userResponse = admin.ToAdminResponse()
-		userType = "admin"
-	} else {
-		utils.UnauthorizedResponse(c, "Invalid user type")
-		return
+	default:
+		userResponse = map[string]interface{}{
+			"id":          user.ID,
+			"email":       user.Email,
+			"first_name":  user.FirstName,
+			"middle_name": user.MiddleName,
+			"last_name":   user.LastName,
+			"user_type":   user.UserType,
+		}
 	}
 
-	// Create response
-	response := map[string]interface{}{
-		"user":      userResponse,
-		"user_type": userType,
-	}
-
-	utils.SuccessResponse(c, http.StatusOK, "User retrieved successfully", response)
+	utils.SuccessResponse(c, http.StatusOK, "User information retrieved successfully", userResponse)
 }
 
-// generateRefreshToken generates a random refresh token
-func generateRefreshToken() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+// Helper function to generate a random string
+func generateRandomString(length int) string {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+	b := make([]byte, length)
+	for i := range b {
+		b[i] = charset[int(time.Now().UnixNano()%int64(len(charset)))]
+		time.Sleep(time.Nanosecond)
 	}
-	return hex.EncodeToString(b), nil
+	return string(b)
 }

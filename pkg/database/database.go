@@ -73,8 +73,6 @@ func ConnectDB() error {
 	// Migrate the schema
 	err = DB.AutoMigrate(
 		&models.User{},
-		&models.Student{},
-		&models.Lecture{},
 		&models.Token{},
 		&models.Admin{},
 	)

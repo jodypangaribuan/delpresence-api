@@ -12,10 +12,6 @@ type TokenType string
 const (
 	// RefreshToken represents a refresh token for JWT authentication
 	RefreshToken TokenType = "refresh"
-	// VerificationToken represents an email verification token
-	VerificationToken TokenType = "verification"
-	// PasswordResetToken represents a password reset token
-	PasswordResetToken TokenType = "password_reset"
 )
 
 // Token represents a stored token in the database
@@ -56,9 +52,4 @@ type TokenPair struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
 	ExpiresIn    int64  `json:"expires_in"` // Expiry in seconds
-}
-
-// RefreshTokenRequest represents the request body for token refresh
-type RefreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token" binding:"required"`
 }

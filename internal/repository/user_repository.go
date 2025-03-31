@@ -69,11 +69,6 @@ func (r *UserRepository) UpdateUser(user *models.User) error {
 	return r.DB.Save(user).Error
 }
 
-// VerifyUser sets a user's verified status to true
-func (r *UserRepository) VerifyUser(userID uint) error {
-	return r.DB.Model(&models.User{}).Where("id = ?", userID).Update("verified", true).Error
-}
-
 // DeleteUser deletes a user
 func (r *UserRepository) DeleteUser(userID uint) error {
 	return r.DB.Delete(&models.User{}, userID).Error

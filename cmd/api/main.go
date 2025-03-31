@@ -44,9 +44,6 @@ func main() {
 		log.Println("Warning: .env file not found, using default values")
 	}
 
-	// Ensure email templates are available in the correct location
-	ensureEmailTemplates()
-
 	// Set Gin mode
 	env := os.Getenv("ENV")
 	if env == "production" {
@@ -126,21 +123,10 @@ func setupRoutes(router *gin.Engine) {
 	// Auth routes
 	auth := api.Group("/auth")
 	{
-		auth.POST("/register/student", authHandler.RegisterStudent)
-		auth.POST("/register/lecture", authHandler.RegisterLecture)
-		auth.POST("/login", authHandler.Login)
+		// Keep only admin login
 		auth.POST("/admin/login", authHandler.AdminLogin)
-		auth.POST("/refresh", authHandler.RefreshToken)
-		auth.POST("/logout", authHandler.Logout)
 
-		// Email verification routes
-		auth.GET("/verify-email", authHandler.VerifyEmail)
-		auth.POST("/resend-verification", authHandler.ResendVerification)
-		auth.POST("/forgot-password", authHandler.ForgotPassword)
-		auth.POST("/reset-password", authHandler.ResetPassword)
-		auth.GET("/validate-reset-token", authHandler.ValidateResetToken)
-
-		// Protected routes
+		// Keep the me endpoint
 		authRequired := auth.Group("/")
 		authRequired.Use(middleware.AuthMiddleware())
 		{
@@ -166,11 +152,6 @@ func setupRoutes(router *gin.Engine) {
 func runMigrations() error {
 	// Migrate name field to first_name, middle_name, last_name
 	if err := migrateNameFields(); err != nil {
-		return err
-	}
-
-	// Rename n_ip to nip in lectures table
-	if err := renameNIPColumn(); err != nil {
 		return err
 	}
 
@@ -261,32 +242,6 @@ func migrateNameFields() error {
 	return nil
 }
 
-// renameNIPColumn renames n_ip column to nip in lectures table
-func renameNIPColumn() error {
-	// Check if n_ip column exists
-	var nIPColumnExists bool
-	result := database.DB.Raw("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'lectures' AND column_name = 'n_ip')").Scan(&nIPColumnExists)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	// If n_ip column exists, rename it to nip
-	if nIPColumnExists {
-		log.Println("Renaming n_ip column to nip in lectures table")
-
-		// Need to use raw SQL because GORM doesn't have a direct method to rename columns
-		if err := database.DB.Exec("ALTER TABLE lectures RENAME COLUMN n_ip TO nip").Error; err != nil {
-			return err
-		}
-
-		log.Println("Successfully renamed n_ip to nip in lectures table")
-	} else {
-		log.Println("n_ip column does not exist in lectures table, skipping migration")
-	}
-
-	return nil
-}
-
 // createAdminUser creates an admin user if it doesn't exist
 func createAdminUser() error {
 	// Import necessary repositories
@@ -342,100 +297,4 @@ func createAdminUser() error {
 	}
 
 	return nil
-}
-
-// ensureEmailTemplates ensures that email templates are available in standard locations
-func ensureEmailTemplates() {
-	// Check for templates in current directory and relative to executable
-	templatesPath := "internal/templates/email"
-
-	// Try to find source templates
-	sourceDirs := []string{
-		templatesPath,
-		"delpresence-api/" + templatesPath,
-		"../../" + templatesPath,
-		"../" + templatesPath,
-	}
-
-	// Get executable path
-	execPath, err := os.Executable()
-	if err != nil {
-		log.Printf("Failed to get executable path: %v", err)
-		return
-	}
-
-	// Create target directory relative to executable
-	execDir := filepath.Dir(execPath)
-	targetDir := filepath.Join(execDir, templatesPath)
-
-	// Check if target directory exists
-	_, err = os.Stat(targetDir)
-	if err == nil {
-		// Directory already exists at executable location
-		log.Printf("Email templates directory already exists at %s", targetDir)
-		return
-	}
-
-	// Create target directory and its parents
-	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		log.Printf("Failed to create templates directory at %s: %v", targetDir, err)
-		return
-	}
-
-	// Find source templates
-	var sourceDir string
-	sourceFound := false
-
-	for _, dir := range sourceDirs {
-		_, err := os.Stat(dir)
-		if err == nil {
-			sourceDir = dir
-			sourceFound = true
-			break
-		}
-	}
-
-	if !sourceFound {
-		// Try with working directory prefix
-		workDir, err := os.Getwd()
-		if err == nil {
-			for _, dir := range sourceDirs {
-				fullPath := filepath.Join(workDir, dir)
-				_, err := os.Stat(fullPath)
-				if err == nil {
-					sourceDir = fullPath
-					sourceFound = true
-					break
-				}
-			}
-		}
-	}
-
-	if !sourceFound {
-		log.Printf("Could not find source email templates in any standard locations")
-		return
-	}
-
-	// Copy template files
-	files := []string{"verification.html", "reset_password.html"}
-	for _, file := range files {
-		sourcePath := filepath.Join(sourceDir, file)
-		targetPath := filepath.Join(targetDir, file)
-
-		// Read source file
-		content, err := os.ReadFile(sourcePath)
-		if err != nil {
-			log.Printf("Failed to read template %s: %v", sourcePath, err)
-			continue
-		}
-
-		// Write to target file
-		err = os.WriteFile(targetPath, content, 0644)
-		if err != nil {
-			log.Printf("Failed to write template to %s: %v", targetPath, err)
-			continue
-		}
-
-		log.Printf("Successfully copied email template from %s to %s", sourcePath, targetPath)
-	}
 }

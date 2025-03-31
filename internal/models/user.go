@@ -52,12 +52,6 @@ func (u *User) ComparePassword(password string) bool {
 	return err == nil
 }
 
-// UserLoginInput represents input data for user login
-type UserLoginInput struct {
-	LoginID  string `json:"login_id" binding:"required"` // NIM or NIP
-	Password string `json:"password" binding:"required"`
-}
-
 // UserResponse represents the user data returned in API responses
 type UserResponse struct {
 	ID         uint     `json:"id"`
