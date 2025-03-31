@@ -121,6 +121,7 @@ func setupRoutes(router *gin.Engine) {
 
 	// Create handlers
 	authHandler := handlers.NewAuthHandler()
+	mahasiswaHandler := handlers.NewMahasiswaHandler()
 
 	// Auth routes
 	auth := api.Group("/auth")
@@ -145,6 +146,17 @@ func setupRoutes(router *gin.Engine) {
 		{
 			authRequired.GET("/me", authHandler.GetCurrentUser)
 		}
+	}
+
+	// Mahasiswa routes
+	mahasiswa := api.Group("/mahasiswa")
+	mahasiswa.Use(middleware.AuthMiddleware()) // Protect all mahasiswa routes
+	{
+		mahasiswa.GET("", mahasiswaHandler.GetMahasiswaByUserID)
+		mahasiswa.GET("/", mahasiswaHandler.GetMahasiswaByUserID)
+		mahasiswa.GET("/by-user-id", mahasiswaHandler.GetMahasiswaByUserID)
+		mahasiswa.GET("/by-nim", mahasiswaHandler.GetMahasiswaDetailByNIM)
+		mahasiswa.GET("/complete", mahasiswaHandler.GetMahasiswaComplete)
 	}
 
 	// Add more API routes here
