@@ -74,7 +74,8 @@ func ConnectDB() error {
 	err = DB.AutoMigrate(
 		&models.User{},
 		&models.Token{},
-		&models.Admin{},
+		&models.Lecturer{},
+		&models.Assistant{},
 	)
 	if err != nil {
 		return err

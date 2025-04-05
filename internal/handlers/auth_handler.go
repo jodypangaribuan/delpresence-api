@@ -1,15 +1,16 @@
 package handlers
 
 import (
-	"log"
+	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
-	"os"
+	"net/url"
+	"strings"
 	"time"
 
-	"delpresence-api/internal/models"
 	"delpresence-api/internal/repository"
 	"delpresence-api/internal/utils"
-	"delpresence-api/pkg/jwt"
 
 	"github.com/gin-gonic/gin"
 )
@@ -17,7 +18,6 @@ import (
 // AuthHandler handles authentication related requests
 type AuthHandler struct {
 	userRepo  *repository.UserRepository
-	adminRepo *repository.AdminRepository
 	tokenRepo *repository.TokenRepository
 }
 
@@ -25,96 +25,100 @@ type AuthHandler struct {
 func NewAuthHandler() *AuthHandler {
 	return &AuthHandler{
 		userRepo:  repository.NewUserRepository(),
-		adminRepo: repository.NewAdminRepository(),
 		tokenRepo: repository.NewTokenRepository(),
 	}
 }
 
-// AdminLogin handles admin login
-func (h *AuthHandler) AdminLogin(c *gin.Context) {
-	var input models.AdminLoginInput
+// CampusLoginResponse represents the response from campus auth API
+type CampusLoginResponse struct {
+	Result       bool       `json:"result"`
+	Error        string     `json:"error"`
+	Success      string     `json:"success"`
+	User         CampusUser `json:"user"`
+	Token        string     `json:"token"`
+	RefreshToken string     `json:"refresh_token"`
+}
 
-	// Validate input
-	if err := c.ShouldBindJSON(&input); err != nil {
-		utils.ValidationErrorResponse(c, err.Error())
+// CampusUser represents the user data from campus auth API
+type CampusUser struct {
+	UserID   int             `json:"user_id"`
+	Username string          `json:"username"`
+	Email    string          `json:"email"`
+	Role     string          `json:"role"`
+	Status   int             `json:"status"`
+	Jabatan  []CampusJabatan `json:"jabatan"`
+}
+
+// CampusJabatan represents the position of a campus user
+type CampusJabatan struct {
+	StrukturJabatanID int    `json:"struktur_jabatan_id"`
+	Jabatan           string `json:"jabatan"`
+}
+
+// CampusLogin handles login through campus authentication system
+func (h *AuthHandler) CampusLogin(c *gin.Context) {
+	// Get username and password from form data
+	username := c.PostForm("username")
+	password := c.PostForm("password")
+
+	if username == "" || password == "" {
+		utils.BadRequestResponse(c, "Username and password are required")
 		return
 	}
 
-	log.Printf("Admin login attempt with email: %s", input.Email)
+	// Create form data for the campus API
+	formData := url.Values{}
+	formData.Add("username", username)
+	formData.Add("password", password)
 
-	// Find user by email
-	user, err := h.userRepo.GetUserByEmail(input.Email)
+	// Create HTTP client with timeout
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+	}
+
+	// Create a new request to the campus API
+	req, err := http.NewRequest("POST", "https://cis.del.ac.id/api/jwt-api/do-auth",
+		strings.NewReader(formData.Encode()))
 	if err != nil {
-		log.Printf("Admin login failed: user not found with email %s", input.Email)
-		utils.UnauthorizedResponse(c, "Invalid credentials")
+		utils.InternalServerErrorResponse(c, "Failed to create request")
 		return
 	}
 
-	// Verify that the user is an admin
-	if user.UserType != models.AdminType {
-		log.Printf("Admin login failed: user with email %s is not an admin", input.Email)
-		utils.UnauthorizedResponse(c, "Invalid credentials")
-		return
-	}
+	// Set required headers
+	req.Header.Add("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Add("Origin", "https://cis.del.ac.id")
+	req.Header.Add("Referer", "https://cis.del.ac.id")
 
-	// Verify password
-	if !user.ComparePassword(input.Password) {
-		log.Printf("Admin login failed: incorrect password for email %s", input.Email)
-		utils.UnauthorizedResponse(c, "Invalid credentials")
-		return
-	}
-
-	// Get admin
-	admin, err := h.adminRepo.GetAdminByUserID(user.ID)
+	// Send the request
+	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("Admin login failed: admin profile not found for user ID %d", user.ID)
-		utils.UnauthorizedResponse(c, "Invalid credentials")
+		utils.InternalServerErrorResponse(c, fmt.Sprintf("Failed to reach campus API: %v", err))
+		return
+	}
+	defer resp.Body.Close()
+
+	// Read the response body
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		utils.InternalServerErrorResponse(c, "Failed to read response from campus API")
 		return
 	}
 
-	// Generate JWT token
-	tokenString, expiryTime, err := jwt.GenerateAccessToken(user.ID, "", user.FirstName, user.MiddleName, user.LastName, user.Email)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to generate access token")
+	// Check if we got a valid JSON response
+	var campusResponse CampusLoginResponse
+	if err := json.Unmarshal(body, &campusResponse); err != nil {
+		utils.InternalServerErrorResponse(c, "Failed to parse response from campus API")
 		return
 	}
 
-	// Generate refresh token
-	refreshToken := generateRandomString(32)
-
-	// Parse refresh token expiry from environment
-	refreshExpiryStr := os.Getenv("REFRESH_TOKEN_EXPIRY")
-	if refreshExpiryStr == "" {
-		refreshExpiryStr = "168h" // Default 7 days
+	// Return the response directly to the client
+	if campusResponse.Result {
+		// Successful login
+		c.JSON(http.StatusOK, campusResponse)
+	} else {
+		// Failed login
+		c.JSON(http.StatusUnauthorized, campusResponse)
 	}
-
-	refreshExpiry, err := time.ParseDuration(refreshExpiryStr)
-	if err != nil {
-		refreshExpiry = 168 * time.Hour // Default 7 days
-	}
-
-	// Save refresh token to database
-	refreshTokenExpiry := time.Now().Add(refreshExpiry)
-	err = h.tokenRepo.CreateToken(user.ID, refreshToken, models.RefreshToken, refreshTokenExpiry)
-	if err != nil {
-		utils.InternalServerErrorResponse(c, "Failed to save refresh token")
-		return
-	}
-
-	// Create response
-	response := map[string]interface{}{
-		"user": admin.ToAdminResponse(),
-		"tokens": map[string]interface{}{
-			"access_token":  tokenString,
-			"refresh_token": refreshToken,
-			"expires_in":    int(time.Until(expiryTime).Seconds()),
-			"token_type":    "Bearer",
-		},
-		"user_type": "admin",
-	}
-
-	log.Printf("Admin login successful for email: %s", input.Email)
-	utils.SuccessResponse(c, http.StatusOK, "Login successful", response)
 }
 
 // GetCurrentUser handles getting the current user's information
@@ -133,26 +137,13 @@ func (h *AuthHandler) GetCurrentUser(c *gin.Context) {
 		return
 	}
 
-	var userResponse interface{}
-
-	// Get user profile based on user type
-	switch user.UserType {
-	case models.AdminType:
-		admin, err := h.adminRepo.GetAdminByUserID(user.ID)
-		if err != nil {
-			utils.NotFoundResponse(c, "Admin profile not found")
-			return
-		}
-		userResponse = admin.ToAdminResponse()
-	default:
-		userResponse = map[string]interface{}{
-			"id":          user.ID,
-			"email":       user.Email,
-			"first_name":  user.FirstName,
-			"middle_name": user.MiddleName,
-			"last_name":   user.LastName,
-			"user_type":   user.UserType,
-		}
+	userResponse := map[string]interface{}{
+		"id":          user.ID,
+		"email":       user.Email,
+		"first_name":  user.FirstName,
+		"middle_name": user.MiddleName,
+		"last_name":   user.LastName,
+		"user_type":   user.UserType,
 	}
 
 	utils.SuccessResponse(c, http.StatusOK, "User information retrieved successfully", userResponse)

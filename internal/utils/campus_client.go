@@ -25,10 +25,11 @@ const (
 
 // TokenCache stores the authentication tokens
 type TokenCache struct {
-	AuthToken    string
-	RefreshToken string
-	ExpiresAt    time.Time
-	mutex        sync.RWMutex
+	AuthToken     string
+	RefreshToken  string
+	ExpiresAt     time.Time
+	IsInitialized bool
+	mutex         sync.RWMutex
 }
 
 // CampusClient is a client for interacting with the campus API
@@ -58,10 +59,11 @@ func (rt *AuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	token := rt.TokenCache.AuthToken
 	refreshToken := rt.TokenCache.RefreshToken
 	expiresAt := rt.TokenCache.ExpiresAt
+	isInitialized := rt.TokenCache.IsInitialized
 	rt.TokenCache.mutex.RUnlock()
 
 	// Get a new token if needed (none exists or is about to expire)
-	tokenIsExpiredOrMissing := token == "" || time.Now().Add(30*time.Second).After(expiresAt)
+	tokenIsExpiredOrMissing := !isInitialized || token == "" || time.Now().Add(30*time.Second).After(expiresAt)
 
 	if tokenIsExpiredOrMissing {
 		log.Printf("[TOKEN_DEBUG] Token is missing or about to expire. Current token: %s... Expiry: %v",
@@ -85,6 +87,7 @@ func (rt *AuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		rt.TokenCache.AuthToken = newToken
 		rt.TokenCache.RefreshToken = newRefreshToken
 		rt.TokenCache.ExpiresAt = expiryTime
+		rt.TokenCache.IsInitialized = true
 		rt.TokenCache.mutex.Unlock()
 
 		token = newToken
@@ -128,6 +131,7 @@ func (rt *AuthRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		rt.TokenCache.AuthToken = newToken
 		rt.TokenCache.RefreshToken = newRefreshToken
 		rt.TokenCache.ExpiresAt = expiryTime
+		rt.TokenCache.IsInitialized = true
 		rt.TokenCache.mutex.Unlock()
 
 		// Create a new request with the new token
@@ -301,22 +305,44 @@ func NewCampusClient() *CampusClient {
 		Timeout:   30 * time.Second,
 	}
 
-	// Pre-fetch a token asynchronously
-	go func() {
-		token, refreshToken, expiresAt, err := getNewToken()
-		if err != nil {
-			log.Printf("Initial token fetch failed: %v", err)
-			return
-		}
+	// Check if we should pre-fetch a token
+	tokenCache.mutex.RLock()
+	initialized := tokenCache.IsInitialized
+	tokenCache.mutex.RUnlock()
 
-		tokenCache.mutex.Lock()
-		tokenCache.AuthToken = token
-		tokenCache.RefreshToken = refreshToken
-		tokenCache.ExpiresAt = expiresAt
-		tokenCache.mutex.Unlock()
+	// Pre-fetch a token asynchronously only if not already initialized
+	if !initialized {
+		go func() {
+			// Double-check in case another goroutine has fetched it
+			tokenCache.mutex.RLock()
+			initialized := tokenCache.IsInitialized
+			tokenCache.mutex.RUnlock()
 
-		log.Printf("Initial token pre-fetched successfully")
-	}()
+			if initialized {
+				log.Printf("Token already pre-fetched, skipping")
+				return
+			}
+
+			token, refreshToken, expiresAt, err := getNewToken()
+			if err != nil {
+				log.Printf("Initial token fetch failed: %v", err)
+				return
+			}
+
+			tokenCache.mutex.Lock()
+			// Check again after acquiring the lock
+			if !tokenCache.IsInitialized {
+				tokenCache.AuthToken = token
+				tokenCache.RefreshToken = refreshToken
+				tokenCache.ExpiresAt = expiresAt
+				tokenCache.IsInitialized = true
+				log.Printf("Initial token pre-fetched successfully")
+			} else {
+				log.Printf("Token pre-fetched by another goroutine, discarding")
+			}
+			tokenCache.mutex.Unlock()
+		}()
+	}
 
 	return &CampusClient{
 		httpClient: httpClient,
@@ -412,4 +438,10 @@ func (c *CampusClient) GetMahasiswaDetailByNIM(nim string) (*models.MahasiswaDet
 	log.Printf("Successfully retrieved details for student with NIM: %s, Name: %s",
 		nim, detailResp.Data.Nama)
 	return &detailResp.Data, nil
+}
+
+// GetWithAuth makes an authenticated GET request to the specified URL
+func (c *CampusClient) GetWithAuth(url string) (*http.Response, error) {
+	log.Printf("Making authenticated request to: %s", url)
+	return c.httpClient.Get(url)
 }

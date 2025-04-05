@@ -8,7 +8,7 @@ import (
 
 	"delpresence-api/internal/handlers"
 	"delpresence-api/internal/middleware"
-	"delpresence-api/internal/models"
+	"delpresence-api/internal/repository"
 	"delpresence-api/pkg/database"
 
 	"github.com/gin-contrib/cors"
@@ -57,9 +57,9 @@ func main() {
 		log.Fatalf("Failed to connect to database: %v", err)
 	}
 
-	// Run migrations
-	if err := runMigrations(); err != nil {
-		log.Printf("Warning: Migration error: %v", err)
+	// Run database migrations
+	if err := database.RunMigrations(); err != nil {
+		log.Fatalf("Failed to run database migrations: %v", err)
 	}
 
 	// Create router
@@ -119,14 +119,29 @@ func setupRoutes(router *gin.Engine) {
 	// Create handlers
 	authHandler := handlers.NewAuthHandler()
 	mahasiswaHandler := handlers.NewMahasiswaHandler()
+	adminHandler := handlers.NewAdminHandler()
+
+	// Get database connection
+	db := database.GetDB()
+
+	// Setup lecturer repository and handler
+	lecturerRepo := repository.NewLecturerRepository(db)
+	lecturerHandler := handlers.NewLecturerHandler(lecturerRepo)
+
+	// Setup assistant repository and handler
+	assistantRepo := repository.NewAssistantRepository(db)
+	assistantHandler := handlers.NewAssistantHandler(assistantRepo)
 
 	// Auth routes
 	auth := api.Group("/auth")
 	{
-		// Keep only admin login
-		auth.POST("/admin/login", authHandler.AdminLogin)
+		// Campus login endpoint (not protected)
+		auth.POST("/campus/login", authHandler.CampusLogin)
 
-		// Keep the me endpoint
+		// Admin login endpoint (not protected)
+		auth.POST("/admin/login", adminHandler.Login)
+
+		// Auth required endpoints
 		authRequired := auth.Group("/")
 		authRequired.Use(middleware.AuthMiddleware())
 		{
@@ -145,156 +160,36 @@ func setupRoutes(router *gin.Engine) {
 		mahasiswa.GET("/complete", mahasiswaHandler.GetMahasiswaComplete)
 	}
 
+	// Admin routes
+	admin := api.Group("/admin")
+	{
+		admin.POST("/login", adminHandler.Login)
+
+		// Admin endpoints that require auth
+		adminAuth := admin.Group("")
+		adminAuth.Use(middleware.AdminAuth())
+		{
+			adminAuth.GET("/profile", adminHandler.GetAdminProfile)
+		}
+	}
+
+	// Lecturer routes
+	lecturer := api.Group("/lecturer")
+	lecturer.Use(middleware.AuthMiddleware()) // Protect all lecturer routes
+	{
+		lecturer.GET("/profile", lecturerHandler.GetLecturerProfile)
+		lecturer.POST("/sync", lecturerHandler.SyncLecturerProfile)
+		lecturer.PATCH("/profile", lecturerHandler.UpdateLecturerProfile)
+	}
+
+	// Assistant routes
+	assistant := api.Group("/assistant")
+	assistant.Use(middleware.AuthMiddleware()) // Protect all assistant routes
+	{
+		assistant.GET("/profile", assistantHandler.GetAssistantProfile)
+		assistant.POST("/sync", assistantHandler.SyncAssistantProfile)
+		assistant.PATCH("/profile", assistantHandler.UpdateAssistantProfile)
+	}
+
 	// Add more API routes here
-}
-
-// runMigrations runs any necessary database migrations
-func runMigrations() error {
-	// Migrate name field to first_name, middle_name, last_name
-	if err := migrateNameFields(); err != nil {
-		return err
-	}
-
-	// Create admin user if it doesn't exist
-	if err := createAdminUser(); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// migrateNameFields splits the name field into first_name, middle_name, and last_name
-func migrateNameFields() error {
-	// Check if the migration has already been run
-	var count int64
-	if err := database.DB.Model(&models.User{}).Where("first_name != ''").Count(&count).Error; err != nil {
-		return err
-	}
-
-	// If there are already users with first_name set, assume migration has been run
-	if count > 0 {
-		log.Println("Name field migration already completed")
-		return nil
-	}
-
-	// This migration was intended to run once to convert old 'name' field data
-	// Since the 'name' field has been removed from the User struct, we can't directly access it
-	// We'll use a raw SQL query to check if the name column exists
-
-	var nameColumnExists bool
-	result := database.DB.Raw("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'name')").Scan(&nameColumnExists)
-	if result.Error != nil {
-		return result.Error
-	}
-
-	if !nameColumnExists {
-		log.Println("Name column no longer exists, skipping migration")
-		return nil
-	}
-
-	// Use raw SQL to get user IDs and names
-	type OldUser struct {
-		ID   uint
-		Name string
-	}
-	var oldUsers []OldUser
-	if err := database.DB.Raw("SELECT id, name FROM users").Scan(&oldUsers).Error; err != nil {
-		return err
-	}
-
-	// Process each user
-	for _, user := range oldUsers {
-		// Skip if empty name
-		if user.Name == "" {
-			continue
-		}
-
-		// Split name into parts
-		nameParts := strings.Fields(user.Name)
-
-		// Update user with split name
-		updates := map[string]interface{}{
-			"first_name":  "",
-			"middle_name": "",
-			"last_name":   "",
-		}
-
-		if len(nameParts) > 0 {
-			updates["first_name"] = nameParts[0]
-		}
-
-		if len(nameParts) > 2 {
-			// Middle parts become middle name
-			updates["middle_name"] = strings.Join(nameParts[1:len(nameParts)-1], " ")
-			updates["last_name"] = nameParts[len(nameParts)-1]
-		} else if len(nameParts) == 2 {
-			// If only two parts, assume first and last name
-			updates["last_name"] = nameParts[1]
-		}
-
-		// Update the user
-		if err := database.DB.Model(&models.User{}).Where("id = ?", user.ID).Updates(updates).Error; err != nil {
-			return err
-		}
-	}
-
-	log.Println("Successfully migrated name fields for all users")
-	return nil
-}
-
-// createAdminUser creates an admin user if it doesn't exist
-func createAdminUser() error {
-	// Import necessary repositories
-	db := database.GetDB()
-	var count int64
-
-	// Check if admin user exists
-	db.Model(&models.User{}).
-		Where("email = ? AND user_type = ?", "admin@del.ac.id", models.AdminType).
-		Count(&count)
-
-	// If admin doesn't exist, create one
-	if count == 0 {
-		log.Println("Creating admin user...")
-		// Start a transaction
-		tx := db.Begin()
-		if tx.Error != nil {
-			return tx.Error
-		}
-		defer tx.Rollback()
-
-		// Create admin user
-		user := &models.User{
-			FirstName: "Admin",
-			LastName:  "Del",
-			Email:     "admin@del.ac.id",
-			Password:  "delpresence",
-			UserType:  models.AdminType,
-			Verified:  true,
-		}
-
-		if err := tx.Create(user).Error; err != nil {
-			return err
-		}
-
-		// Create admin profile
-		admin := &models.Admin{
-			UserID: user.ID,
-		}
-
-		if err := tx.Create(admin).Error; err != nil {
-			return err
-		}
-
-		// Commit transaction
-		if err := tx.Commit().Error; err != nil {
-			return err
-		}
-
-		log.Println("Admin user created successfully")
-	} else {
-		log.Println("Admin user already exists")
-	}
-
-	return nil
 }

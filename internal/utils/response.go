@@ -98,11 +98,19 @@ func NotFoundResponse(c *gin.Context, message string) {
 }
 
 // BadRequestResponse returns a 400 bad request response
-func BadRequestResponse(c *gin.Context, message string, data interface{}) {
+func BadRequestResponse(c *gin.Context, message string, data ...interface{}) {
 	LogError("BadRequest", "Request Processing", fmt.Errorf(message))
-	c.JSON(http.StatusBadRequest, gin.H{
-		"success": false,
-		"message": message,
-		"data":    data,
-	})
+
+	if len(data) > 0 && data[0] != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": message,
+			"data":    data[0],
+		})
+	} else {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success": false,
+			"message": message,
+		})
+	}
 }
